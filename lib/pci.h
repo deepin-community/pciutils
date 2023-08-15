@@ -1,7 +1,7 @@
 /*
  *	The PCI Library
  *
- *	Copyright (c) 1997--2020 Martin Mares <mj@ucw.cz>
+ *	Copyright (c) 1997--2023 Martin Mares <mj@ucw.cz>
  *
  *	Can be freely distributed and used under the terms of the GNU GPL.
  */
@@ -16,7 +16,7 @@
 #include "header.h"
 #include "types.h"
 
-#define PCI_LIB_VERSION 0x030700
+#define PCI_LIB_VERSION 0x030a00
 
 #ifndef PCI_ABI
 #define PCI_ABI
@@ -43,6 +43,12 @@ enum pci_access_type {
   PCI_ACCESS_DARWIN,			/* Darwin */
   PCI_ACCESS_SYLIXOS_DEVICE,		/* SylixOS pci */
   PCI_ACCESS_HURD,			/* GNU/Hurd */
+  PCI_ACCESS_WIN32_CFGMGR32,		/* Win32 cfgmgr32.dll */
+  PCI_ACCESS_WIN32_KLDBG,		/* Win32 kldbgdrv.sys */
+  PCI_ACCESS_WIN32_SYSDBG,		/* Win32 NT SysDbg */
+  PCI_ACCESS_MMIO_TYPE1,		/* MMIO ports, type 1 */
+  PCI_ACCESS_MMIO_TYPE1_EXT,		/* MMIO ports, type 1 extended */
+  PCI_ACCESS_ECAM,			/* PCIe ECAM via /dev/mem */
   PCI_ACCESS_MAX
 };
 
@@ -62,7 +68,7 @@ struct pci_access {
   int debugging;			/* Turn on debugging messages */
 
   /* Functions you can override: */
-  void (*error)(char *msg, ...) PCI_PRINTF(1,2);	/* Write error message and quit */
+  void (*error)(char *msg, ...) PCI_PRINTF(1,2) PCI_NONRET;	/* Write error message and quit */
   void (*warning)(char *msg, ...) PCI_PRINTF(1,2);	/* Write a warning message */
   void (*debug)(char *msg, ...) PCI_PRINTF(1,2);	/* Write a debugging message */
 
@@ -82,6 +88,7 @@ struct pci_access {
   int fd_pos;				/* proc/sys: current position */
   int fd_vpd;				/* sys: fd for VPD */
   struct pci_dev *cached_dev;		/* proc/sys: device the fds are for */
+  void *aux;				/* Auxiliary data for use by the back-end */
 };
 
 /* Initialize PCI access */
@@ -142,6 +149,13 @@ struct pci_dev {
   pciaddr_t flags[6];			/* PCI_IORESOURCE_* flags for regions */
   pciaddr_t rom_flags;			/* PCI_IORESOURCE_* flags for expansion ROM */
   int domain;				/* PCI domain (host bridge) */
+  pciaddr_t bridge_base_addr[4];	/* Bridge base addresses (without flags) */
+  pciaddr_t bridge_size[4];		/* Bridge sizes */
+  pciaddr_t bridge_flags[4];		/* PCI_IORESOURCE_* flags for bridge addresses */
+  u8 prog_if, rev_id;			/* Programming interface for device_class and revision id */
+  u16 subsys_vendor_id, subsys_id;	/* Subsystem vendor id and subsystem id */
+  struct pci_dev *parent;		/* Parent device, does not have to be always accessible */
+  int no_config_access;			/* No access to config space for this device */
 
   /* Fields used internally */
   struct pci_access *access;
@@ -158,14 +172,17 @@ struct pci_dev {
 #define PCI_ADDR_MEM_MASK (~(pciaddr_t) 0xf)
 #define PCI_ADDR_FLAG_MASK 0xf
 
-u8 pci_read_byte(struct pci_dev *, int pos) PCI_ABI; /* Access to configuration space */
+/* Access to configuration space */
+u8 pci_read_byte(struct pci_dev *, int pos) PCI_ABI;
 u16 pci_read_word(struct pci_dev *, int pos) PCI_ABI;
 u32 pci_read_long(struct pci_dev *, int pos) PCI_ABI;
-int pci_read_block(struct pci_dev *, int pos, u8 *buf, int len) PCI_ABI;
 int pci_read_vpd(struct pci_dev *d, int pos, u8 *buf, int len) PCI_ABI;
 int pci_write_byte(struct pci_dev *, int pos, u8 data) PCI_ABI;
 int pci_write_word(struct pci_dev *, int pos, u16 data) PCI_ABI;
 int pci_write_long(struct pci_dev *, int pos, u32 data) PCI_ABI;
+
+/* Configuration space as a sequence of bytes (little-endian) */
+int pci_read_block(struct pci_dev *, int pos, u8 *buf, int len) PCI_ABI;
 int pci_write_block(struct pci_dev *, int pos, u8 *buf, int len) PCI_ABI;
 
 /*
@@ -205,7 +222,12 @@ char *pci_get_string_property(struct pci_dev *d, u32 prop) PCI_ABI;
 #define PCI_FILL_IO_FLAGS	0x1000
 #define PCI_FILL_DT_NODE	0x2000		/* Device tree node */
 #define PCI_FILL_IOMMU_GROUP	0x4000
+#define PCI_FILL_BRIDGE_BASES	0x8000
 #define PCI_FILL_RESCAN		0x00010000
+#define PCI_FILL_CLASS_EXT	0x00020000      /* prog_if and rev_id */
+#define PCI_FILL_SUBSYS		0x00040000      /* subsys_vendor_id and subsys_id */
+#define PCI_FILL_PARENT		0x00080000
+#define PCI_FILL_DRIVER		0x00100000      /* OS driver currently in use (string property) */
 
 void pci_setup_cache(struct pci_dev *, u8 *cache, int len) PCI_ABI;
 
@@ -233,8 +255,11 @@ struct pci_cap *pci_find_cap_nr(struct pci_dev *, unsigned int id, unsigned int 
 
 struct pci_filter {
   int domain, bus, slot, func;			/* -1 = ANY */
-  int vendor, device, device_class;
-  int rfu[3];
+  int vendor, device;
+  int device_class;
+  unsigned int device_class_mask;		/* Which bits of the device_class are compared, default=all */
+  int prog_if;
+  int rfu[1];
 };
 
 void pci_filter_init(struct pci_access *, struct pci_filter *) PCI_ABI;

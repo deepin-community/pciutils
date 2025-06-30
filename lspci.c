@@ -3,7 +3,9 @@
  *
  *	Copyright (c) 1997--2020 Martin Mares <mj@ucw.cz>
  *
- *	Can be freely distributed and used under the terms of the GNU GPL.
+ *	Can be freely distributed and used under the terms of the GNU GPL v2+.
+ *
+ *	SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include <stdio.h>
@@ -105,6 +107,7 @@ config_fetch(struct device *d, unsigned int pos, unsigned int len)
       d->config = xrealloc(d->config, d->config_bufsize);
       d->present = xrealloc(d->present, d->config_bufsize);
       memset(d->present + orig_size, 0, d->config_bufsize - orig_size);
+      pci_setup_cache(d->dev, d->config, d->dev->cache_len);
     }
   result = pci_read_block(d->dev, pos, d->config + pos, len);
   if (result)
@@ -802,7 +805,7 @@ show_verbose(struct device *d)
 
   pci_fill_info(p, PCI_FILL_IRQ | PCI_FILL_BASES | PCI_FILL_ROM_BASE | PCI_FILL_SIZES |
     PCI_FILL_PHYS_SLOT | PCI_FILL_NUMA_NODE | PCI_FILL_DT_NODE | PCI_FILL_IOMMU_GROUP |
-    PCI_FILL_BRIDGE_BASES | PCI_FILL_CLASS_EXT | PCI_FILL_SUBSYS);
+    PCI_FILL_BRIDGE_BASES | PCI_FILL_CLASS_EXT | PCI_FILL_SUBSYS | PCI_FILL_RCD_LNK);
 
   switch (htype)
     {
